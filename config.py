@@ -1,4 +1,7 @@
 import os
+import re
+import json
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,79 +26,118 @@ BAYESIAN_THRESHOLD = 0.70
 POLLING_INTERVAL_SECONDS = 300
 
 # --- LLM (Ollama Cloud) ---
-OLLAMA_API_KEY  = os.getenv("OLLAMA_API_KEY")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "https://ollama.com/v1")
-OLLAMA_MODEL    = os.getenv("OLLAMA_MODEL", "gemma4:31b-cloud")
+def _get_secret(key: str) -> str:
+    try:
+        import streamlit as st
+        return st.secrets.get(key, os.getenv(key, ""))
+    except Exception:
+        return os.getenv(key, "")
+
+OLLAMA_API_KEY  = _get_secret("OLLAMA_API_KEY")
+OLLAMA_BASE_URL = _get_secret("OLLAMA_BASE_URL") or "https://ollama.com/v1"
+OLLAMA_MODEL    = _get_secret("OLLAMA_MODEL")    or "gemma4:31b-cloud"
 
 # --- Fallback keywords ---
 _DEFAULT_KEYWORDS = ["bitcoin", "election", "fed rate", "trump", "crypto"]
 
-# --- Tag slugs we care about from Polymarket ---
-# These come directly from Polymarket's own tag system
+# --- Relevant tag slugs from Polymarket ---
 _RELEVANT_TAG_SLUGS = {
     "crypto", "finance", "economy", "business", "politics",
     "stocks", "ipos", "geopolitics", "world", "tech",
-    "science", "climate", "fed", "rates", "war", "election"
+    "science", "climate", "fed", "rates", "war", "election",
+    "world-elections", "middle-east", "asia", "europe"
 }
 
-def get_dynamic_keywords(limit: int = 5) -> list[str]:
-    """
-    Fetches Polymarket EVENTS (not markets) — which have proper tags.
-    Filters to financially/politically relevant events only using tag slugs.
-    Uses event title directly as keyword — no hardcoding, no NLP.
-    Sorted by volume — most actively traded first.
-    """
+def get_dynamic_keywords(limit: int = 8) -> list[str]:
     try:
-        import requests
-
         url = "https://gamma-api.polymarket.com/events?limit=100&active=true&closed=false"
         response = requests.get(url)
         response.raise_for_status()
         events = response.json()
-
-        # sort by volume descending
         events.sort(key=lambda x: float(x.get("volume", 0) or 0), reverse=True)
 
-        keywords  = []
+        keywords    = []
         used_titles = set()
 
         for event in events:
-            # extract tag slugs for this event
-            tags     = event.get("tags", [])
+            tags      = event.get("tags", [])
             tag_slugs = {t.get("slug", "").lower() for t in tags}
-
-            # only keep events with at least one relevant tag
             if not tag_slugs.intersection(_RELEVANT_TAG_SLUGS):
                 continue
-
-            title = event.get("title", "").strip()
+            title = event.get("title", "").strip().rstrip("?.,!")
             if not title or title in used_titles:
                 continue
-
-            # clean up the title — remove trailing punctuation
-            title = title.rstrip("?.,!")
             used_titles.add(title)
-            keywords.append({
-                "keyword": title,
-                "tags":    [t.get("label") for t in tags],
-                "volume":  float(event.get("volume", 0) or 0)
-            })
-
+            keywords.append(title)
             if len(keywords) >= limit:
                 break
 
-        if keywords:
-            print(f"\n  🎯 Trending Polymarket topics:")
-            for k in keywords:
-                print(f"     → [{k['tags'][0] if k['tags'] else 'N/A'}] "
-                      f"{k['keyword']} (vol: ${k['volume']:,.0f})")
-            return [k["keyword"] for k in keywords]
-
-        return _DEFAULT_KEYWORDS
+        final = keywords if keywords else _DEFAULT_KEYWORDS
+        print(f"  Trending Polymarket topics: {final}")
+        return final
 
     except Exception as e:
-        print(f"  ⚠️  Falling back to defaults: {e}")
+        print(f"  Falling back to defaults: {e}")
         return _DEFAULT_KEYWORDS
 
 
+def get_keyword_market_map(limit: int = 8) -> dict:
+    """
+    Returns dict mapping keyword to its Polymarket market data.
+    Keyword and market are always in sync.
+    """
+    try:
+        url = "https://gamma-api.polymarket.com/events?limit=100&active=true&closed=false"
+        response = requests.get(url)
+        response.raise_for_status()
+        events = response.json()
+        events.sort(key=lambda x: float(x.get("volume", 0) or 0), reverse=True)
+
+        result      = {}
+        used_titles = set()
+
+        for event in events:
+            tags      = event.get("tags", [])
+            tag_slugs = {t.get("slug", "").lower() for t in tags}
+            if not tag_slugs.intersection(_RELEVANT_TAG_SLUGS):
+                continue
+
+            title = event.get("title", "").strip().rstrip("?.,!")
+            if not title or title in used_titles:
+                continue
+            used_titles.add(title)
+
+            event_markets = event.get("markets", [])
+            yes_price     = None
+            question      = title
+
+            if event_markets:
+                try:
+                    first  = event_markets[0]
+                    prices = first.get("outcomePrices", "[]")
+                    if isinstance(prices, str):
+                        prices = json.loads(prices)
+                    yes_price = float(prices[0]) if prices else None
+                    question  = first.get("question", title)
+                except Exception:
+                    pass
+
+            result[title] = {
+                "question":  question,
+                "yes_price": yes_price,
+                "volume":    float(event.get("volume", 0) or 0),
+                "tags":      [t.get("label") for t in tags]
+            }
+
+            if len(result) >= limit:
+                break
+
+        return result
+
+    except Exception as e:
+        print(f"  Could not build keyword-market map: {e}")
+        return {}
+
+
+# default fallback
 TRACKED_KEYWORDS = _DEFAULT_KEYWORDS
