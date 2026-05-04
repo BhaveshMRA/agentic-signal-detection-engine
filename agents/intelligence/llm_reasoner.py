@@ -66,6 +66,31 @@ def reason_over_context(current_post: str, historical_context: str, market_info:
         "raw":        raw
     }
 
+def generate_search_queries(polymarket_topic: str) -> list[str]:
+    """Generates concise search queries from a Polymarket topic."""
+    client = get_client()
+    prompt = f"""You are an expert researcher. Given this Polymarket market topic:
+'{polymarket_topic}'
+
+Generate exactly 3 concise, highly effective search queries (2-4 words each) that would find relevant news or rumors about this topic on social media. 
+Return only the queries, one per line, with no bullets, quotes, or numbers."""
+
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("OLLAMA_MODEL", "gemma4:31b-cloud"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=100
+        )
+        raw = response.choices[0].message.content.strip()
+        queries = [line.strip().strip('-*."\'1234567890 ') for line in raw.split("\n") if line.strip()]
+        return queries[:3]
+    except Exception as e:
+        print(f"Error generating queries: {e}")
+        # fallback
+        return [polymarket_topic.split()[0], polymarket_topic]
+
+
 if __name__ == "__main__":
     from agents.ingestion.hackernews_agent import scrape_hackernews
     from agents.processing.preprocessor import preprocess_batch

@@ -37,6 +37,10 @@ OLLAMA_API_KEY  = _get_secret("OLLAMA_API_KEY")
 OLLAMA_BASE_URL = _get_secret("OLLAMA_BASE_URL") or "https://ollama.com/v1"
 OLLAMA_MODEL    = _get_secret("OLLAMA_MODEL")    or "gemma4:31b-cloud"
 
+TWITTER_CONSUMER_KEY    = _get_secret("TWITTER_CONSUMER_KEY")
+TWITTER_CONSUMER_SECRET = _get_secret("TWITTER_CONSUMER_SECRET")
+
+
 # --- Fallback keywords ---
 _DEFAULT_KEYWORDS = ["bitcoin", "election", "fed rate", "trump", "crypto"]
 

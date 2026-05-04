@@ -12,7 +12,7 @@ from agents.processing.embedder import embed_texts
 from agents.processing.vector_store import upsert_posts, get_collection_size
 from agents.intelligence.change_detector import compute_drift_score
 from agents.intelligence.rag_retriever import retrieve_context
-from agents.intelligence.llm_reasoner import reason_over_context
+from agents.intelligence.llm_reasoner import reason_over_context, generate_search_queries
 from agents.intelligence.bayesian_model import BayesianSignalModel
 from agents.intelligence.correlator import snapshot_markets
 from config import get_keyword_market_map, BAYESIAN_THRESHOLD
@@ -68,61 +68,76 @@ st.divider()
 st.subheader("⚙️ What Should We Watch?")
 col_kw, col_posts, col_markets = st.columns([2, 1, 2])
 
+if "generated_options" not in st.session_state:
+    st.session_state.generated_options = []
+if "selected_market_topic" not in st.session_state:
+    st.session_state.selected_market_topic = LIVE_KEYWORDS[0] if LIVE_KEYWORDS else ""
+
 with col_kw:
-    selected_kw = st.multiselect(
-        "Topics to monitor right now",
+    selected_kw = st.selectbox(
+        "1. Select Polymarket Topic",
         LIVE_KEYWORDS,
-        default=LIVE_KEYWORDS[:3],
+        index=0,
         help="Auto-fetched live from Polymarket's most actively traded markets"
     )
+    
+    if selected_kw != st.session_state.selected_market_topic:
+        st.session_state.selected_market_topic = selected_kw
+        st.session_state.generated_options = [] # reset on change
+        
+    generate = st.button("✨ 2. Generate Search Options (LLM)", use_container_width=True)
+    if generate:
+        with st.spinner("Generating best search queries..."):
+            st.session_state.generated_options = generate_search_queries(selected_kw)
 
+    search_query = None
+    if st.session_state.generated_options:
+        search_query = st.radio("3. Select exact search query to monitor:", st.session_state.generated_options)
+        
 with col_posts:
     n_posts = st.slider("Posts to analyse per topic", 5, 30, 10)
 
 with col_markets:
-    st.markdown("**🏦 Linked Polymarket Markets**")
-    st.caption("Markets linked to your selected topics")
+    st.markdown("**🏦 Linked Polymarket Market**")
+    st.caption("Market linked to your selected topic")
     if selected_kw:
-        for kw in selected_kw[:4]:
-            market = KEYWORD_MARKET_MAP.get(kw, {})
-            if market and market.get("yes_price"):
-                yes  = f"{float(market['yes_price'])*100:.0f}%"
-                tags = ", ".join(market.get("tags", [])[:2])
-                st.markdown(f"- **{yes} chance** · {market['question'][:55]}...")
-                st.caption(f"  Tags: {tags} · Vol: ${market['volume']:,.0f}")
-            else:
-                st.markdown(f"- **?%** · {kw}")
+        market = KEYWORD_MARKET_MAP.get(selected_kw, {})
+        if market and market.get("yes_price"):
+            yes  = f"{float(market['yes_price'])*100:.0f}%"
+            tags = ", ".join(market.get("tags", [])[:2])
+            st.markdown(f"- **{yes} chance** · {market['question'][:55]}...")
+            st.caption(f"  Tags: {tags} · Vol: ${market['volume']:,.0f}")
     else:
-        st.info("Select topics on the left to see linked markets")
+        st.info("Select a topic on the left to see linked markets")
 
 st.divider()
 
-run = st.button("🚀 Run the Detection Pipeline Now", type="primary", use_container_width=True)
+run = st.button("🚀 4. Run the Detection Pipeline Now", type="primary", use_container_width=True, disabled=(not search_query))
 
-if run:
-    if not selected_kw:
-        st.warning("Please select at least one topic!")
-    else:
-        st.session_state.run_count += 1
-        run_id   = st.session_state.run_count
-        progress = st.progress(0, text="Starting...")
+if run and search_query:
+    kw = selected_kw  # keep the original kw for correlation/display
+    
+    st.session_state.run_count += 1
+    run_id   = st.session_state.run_count
+    
+    with st.spinner(f"Taking market snapshot for '{kw}'..."):
+        before = snapshot_markets()
 
-        for idx, kw in enumerate(selected_kw):
-            progress.progress(idx / len(selected_kw),
-                              text=f"Step {idx+1} of {len(selected_kw)}: Analysing '{kw}'...")
-
-            with st.spinner(f"Taking market snapshot for '{kw}'..."):
-                before = snapshot_markets()
-
-            with st.spinner(f"Scraping '{kw}' posts..."):
-                raw   = scrape_hackernews(kw, limit=n_posts)
-                posts = preprocess_batch(raw)
-                if not posts:
-                    continue
-                texts = [p["clean_text"] for p in posts]
-                embs  = embed_texts(texts)
-                upsert_posts(posts, embs)
-                drift = compute_drift_score(embs)
+    with st.spinner(f"Scraping HackerNews & Twitter for '{search_query}'..."):
+        from agents.ingestion.twitter_agent import scrape_twitter
+        raw_hn = scrape_hackernews(search_query, limit=n_posts)
+        raw_tw = scrape_twitter(search_query, limit=n_posts)
+        raw = raw_hn + raw_tw
+        
+        posts = preprocess_batch(raw)
+        
+        if not posts:
+            st.warning("No posts found for this query!")
+        else:
+            texts = [p["clean_text"] for p in posts]
+            embs  = embed_texts(texts)
+            upsert_posts(posts, embs)
+            drift = compute_drift_score(embs)
 
             with st.spinner(f"Asking Gemma 4 AI about '{kw}'..."):
                 latest      = posts[-1]
@@ -137,7 +152,6 @@ if run:
                 from agents.intelligence.correlator import validate_signal
                 after  = snapshot_markets()
                 corr   = validate_signal(before, after, kw)
-                # feed ground truth back into Bayesian
                 if llm_result["is_signal"]:
                     st.session_state.bayes.update(corr["confirmed"])
                     p = st.session_state.bayes.probability()
@@ -166,7 +180,7 @@ if run:
                 "confirmed": corr["confirmed"],
                 "p":         round(p, 4),
                 "reason":    llm_result["reasoning"],
-                "post":      latest["title"]
+                "posts":     [{"title": p["title"], "source": p["source"], "text": p.get("text", "")} for p in posts[-10:]]
             })
 
             if p > BAYESIAN_THRESHOLD:
@@ -180,8 +194,7 @@ if run:
                     "reason":    llm_result["reasoning"]
                 })
 
-        progress.progress(1.0, text="Done!")
-        st.rerun()
+            st.rerun()
 
 st.divider()
 
@@ -443,8 +456,8 @@ elif "Technical" in view:
     <span style="font-size:15px;font-weight:700;">Run #{entry['run_id']} · {entry['keyword']}</span>
     <span style="font-size:14px;font-weight:600;">{entry['verdict']} · {conf_badge}</span>
   </div>
-  <div style="font-size:12px;color:#aaa;margin-bottom:6px;">
-    📰 <i>{entry['post'][:90]}...</i>
+  <div style="font-size:12px;color:#aaa;margin-bottom:6px;max-height:200px;overflow-y:auto;background:rgba(0,0,0,0.2);padding:8px;border-radius:4px;">
+    {"".join(f"<div style='margin-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:6px;'><div>{'🐦' if p.get('source') == 'twitter' else '👽'} <b>{p.get('title', '')}</b></div><div style='color:#ccc;margin-top:4px;line-height:1.4;'>{p.get('text', '')}</div></div>" for p in entry.get('posts', [{'title': entry.get('post', ''), 'source': 'hackernews', 'text': ''}]))}
   </div>
   <div style="display:flex;gap:24px;font-size:13px;margin-bottom:6px;">
     <span>Drift: <b>{entry['drift']}</b></span>

@@ -19,7 +19,7 @@ This system detects those shifts **before** prices move.
 ```
 ┌─────────────────────────────────────────────────┐
 │           LAYER 1 — DATA COLLECTION             │
-│   HackerNews Scraper    ·    Polymarket API      │
+│   HackerNews & Twitter Scrapers · Polymarket    │
 └────────────────────────┬────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────┐
@@ -46,7 +46,7 @@ This system detects those shifts **before** prices move.
 
 | Component | Tool |
 |---|---|
-| Data — HackerNews | Algolia HN API |
+| Data — Social Media | Algolia HN API, Tweepy (Twitter) |
 | Data — Prediction Markets | Polymarket REST API |
 | Text Embeddings | `sentence-transformers` (all-MiniLM-L6-v2) |
 | Vector Store + RAG | `chromadb` |
@@ -168,17 +168,20 @@ Full run log with AI reasoning, raw data table with CSV export, Bayesian update 
 
 ## 📍 Where We Left Off
 
-### Last Session: April 27, 2026
+### Last Session: May 4, 2026
 
 **Done:**
-- ✅ Full 7-node LangGraph pipeline end to end
-- ✅ HackerNews + Polymarket live data ingestion
+- ✅ Full 8-node LangGraph pipeline end to end
+- ✅ HackerNews + Twitter + Polymarket live data ingestion
+- ✅ Dynamic LLM Search Query Generation for Polymarket topics
+- ✅ Twitter Agent with Fallback Mock Generation
 - ✅ sentence-BERT embeddings + ChromaDB
 - ✅ PELT change detection + drift scoring
 - ✅ RAG retrieval pipeline
 - ✅ Gemma 4 31B reasoning via Ollama Cloud
 - ✅ Bayesian probability model
 - ✅ Correlator agent built and tested
+- ✅ Correlator feedback loop wired into Bayesian model
 - ✅ 3-view Streamlit dashboard (Layman / Analyst / Technical)
 - ✅ Dynamic keywords from Polymarket Events API
 - ✅ Smart HackerNews search term extraction
@@ -187,7 +190,6 @@ Full run log with AI reasoning, raw data table with CSV export, Bayesian update 
 
 **Next session:**
 - ⬜ Deploy to Streamlit Cloud
-- ⬜ Wire Correlator feedback into LangGraph pipeline
 - ⬜ QLoRA fine-tuning on Colab Pro (optional)
 
 ### Resume Commands
